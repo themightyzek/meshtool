@@ -33,10 +33,13 @@ endif()
 # include for local package
 
 
-# Creating entries for all C++ files with "main" routine
-# ##########################################################
+# Creating entries for target: meshtool
+# ############################
 
+add_executable( meshtool  lodepng.cpp meshtool.cpp )
 
-create_single_source_cgal_program( "meshtool.cpp" )
+add_to_cached_list( CGAL_EXECUTABLE_TARGETS meshtool )
 
+# Link the executable to CGAL and third-party libraries
+target_link_libraries(meshtool PRIVATE CGAL::CGAL )
 

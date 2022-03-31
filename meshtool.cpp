@@ -2,12 +2,11 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include <utility>
 #include <map>
 
 #include "CLI11.hpp"
 
-#include "lodepng/png.h"
+#include "png.h"
 
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Surface_mesh/Surface_mesh.h>
@@ -15,9 +14,14 @@
 #include <CGAL/IO/read_ply_points.h>
 #include <CGAL/Surface_mesh_parameterization/parameterize.h>
 #include <CGAL/Polygon_mesh_processing/measure.h>
-#include <CGAL/Triangulation_2.h>
+#include <CGAL/Search_traits_3.h>
+#include <CGAL/Search_traits_adapter.h>
+#include <CGAL/point_generators_3.h>
+#include <CGAL/Orthogonal_k_neighbor_search.h>
+#include <CGAL/boost/iterator/counting_iterator.hpp>
 #include <CGAL/boost/graph/iterator.h>
-#include <CGAL/boost/bimap.hpp>
+
+#include <utility>
 
 typedef CGAL::Simple_cartesian<double> K;
 typedef K::FT FT;
@@ -34,13 +38,35 @@ typedef CGAL::Nth_of_tuple_property_map<2, PNCI> Color_map;
 typedef CGAL::Nth_of_tuple_property_map<3, PNCI> Intensity_map;
 
 typedef CGAL::Surface_mesh<Point> SurfaceMesh;
-typedef CGAL::Triangulation_2<K> Triangulation;
 
 typedef boost::graph_traits<SurfaceMesh>::vertex_descriptor vertex_descriptor;
 typedef boost::graph_traits<SurfaceMesh>::halfedge_descriptor halfedge_descriptor;
 typedef boost::graph_traits<SurfaceMesh>::face_descriptor face_descriptor;
 
-typedef boost::bimap<vertex_descriptor, Triangulation::Vertex_handle> MeshUVTrBimap;
+class My_point_property_map
+{
+    const std::vector<Point> &points;
+
+public:
+    typedef Point value_type;
+    typedef const value_type &reference;
+    typedef std::size_t key_type;
+    typedef boost::lvalue_property_map_tag category;
+    My_point_property_map(const std::vector<Point> &pts) : points(pts) {}
+    reference operator[](key_type k) const { return points[k]; }
+    friend reference get(const My_point_property_map &ppmap, key_type i)
+    {
+        return ppmap[i];
+    }
+};
+
+typedef CGAL::Random_points_in_cube_3<Point> Random_points_iterator;
+typedef CGAL::Search_traits_3<K> Traits_base;
+typedef CGAL::Search_traits_adapter<std::size_t, My_point_property_map, Traits_base> Traits;
+typedef CGAL::Orthogonal_k_neighbor_search<Traits> Neighbor_search;
+typedef Neighbor_search::Tree Tree;
+typedef Tree::Splitter Splitter;
+typedef Neighbor_search::Distance Distance;
 
 using namespace std;
 namespace SMP = CGAL::Surface_mesh_parameterization;
@@ -54,7 +80,7 @@ int main(int argc, char **argv)
     app.add_option("-c,--in-cloud", cloudFilename, "The input cloud in .ply format");
     CLI11_PARSE(app, argc, argv);
 
-    // --------------CGAL----------------
+    // --------------CGAL----------------5
 
     // read point cloud
     vector<PNCI> points;
@@ -74,6 +100,37 @@ int main(int argc, char **argv)
         cerr << "Error: unable to read from file " << cloudFilename << endl;
         return EXIT_FAILURE;
     }
+    else
+    {
+        cout << "Success: cloud loaded. " << points.size() << " points" << endl;
+    }
+
+    vector<Point> rawpoints;
+    rawpoints.reserve(points.size());
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        rawpoints.push_back(get<0>(points[i]));
+    }
+    My_point_property_map ppmap(rawpoints);
+
+    Tree tree(
+        boost::counting_iterator<size_t>(0),
+        boost::counting_iterator<size_t>(rawpoints.size()),
+        Splitter(),
+        Traits(ppmap));
+    Distance tr_dist(ppmap);
+    // Tree tree(rawpoints.begin(), rawpoints.end());
+
+    cout << "Success: spatial search tree created. Initializing...";
+    Neighbor_search init_search(tree, Point(0, 0, 0), 1, 0, true, tr_dist);
+    for (Neighbor_search::iterator it = init_search.begin(); it != init_search.end(); it++)
+    {
+        cout << " d(q, nearest neighbor)=  "
+             << tr_dist.inverse_of_transformed_distance(it->second) << " "
+             << rawpoints[it->first] << " " << it->first << endl;
+    }
+
+    cout << " done." << endl;
 
     // read mesh
     SurfaceMesh mesh;
@@ -91,16 +148,16 @@ int main(int argc, char **argv)
         cout << "Success: loaded mesh " << meshFilename << endl;
         cout << mesh.number_of_vertices() << " verts, " << mesh.number_of_faces() << " tris" << endl;
         cout << "Vertex list:" << endl;
-        for(vertex_descriptor v : mesh.vertices())
+        for (vertex_descriptor v : mesh.vertices())
         {
             cout << v << ": " << mesh.point(v) << endl;
         }
 
         cout << "Face list:" << endl;
-        for(face_descriptor face_i : mesh.faces())
+        for (face_descriptor face_i : mesh.faces())
         {
             cout << face_i << ": ";
-            for(vertex_descriptor v : mesh.vertices_around_face(mesh.halfedge(face_i)))
+            for (vertex_descriptor v : mesh.vertices_around_face(mesh.halfedge(face_i)))
                 cout << v << " ";
             cout << endl;
         }
@@ -114,101 +171,74 @@ int main(int argc, char **argv)
     UV_pmap uv_map = mesh.add_property_map<vertex_descriptor, Point_2>("h:uv").first;
     SMP::parameterize(mesh, bhd, uv_map);
 
-    cout << "Success: created UV map for mesh" << endl << "UV Coords: " << endl;
-    for(vertex_descriptor v : mesh.vertices())
+    cout << "Success: created UV map for mesh" << endl
+         << "UV Coords: " << endl;
+    for (vertex_descriptor v : mesh.vertices())
     {
         cout << v << ": " << uv_map[v] << endl;
     }
 
-    // create triangulation from UV map
-    Triangulation Tr;
-
-    MeshUVTrBimap mesh_uvtr_map;
-
-    for(vertex_descriptor v : mesh.vertices())
-    {
-        mesh_uvtr_map.insert(MeshUVTrBimap::value_type(v, Tr.insert(uv_map[v])));
-    }
-
-    cout << "Success: Created Triangulation from UV Map" << endl;
-    cout << Tr.number_of_vertices() << " vertices, " << Tr.number_of_faces() << " faces" << endl;
-    cout << "Point list:" << endl; 
-
-    for(Point_2 p : Tr.points())
-        cout << p << endl;
-
-    vector<Triangulation::Face_handle> face_handles;
-    cout << "Face handles:" << endl;
-    for(Triangulation::Face_handle f : Tr.finite_face_handles())
-    {
-        Triangulation::Face face = *f;
-        cout << face << ": " << *face.vertex(0) << " | " << *face.vertex(1) << " | " << *face.vertex(2) << endl;
-        face_handles.push_back(f);
-    }
-    cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
-
-
-    // Triangulation has correct vertices, but its faces are not correct
-    for(Triangulation::Face_handle f : face_handles)
-    {
-        Tr.delete_face(f);
-    }
-
-    cout << "Deleted Triangulation faces" << endl; 
-    cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
-
-    for(face_descriptor face_d : mesh.faces())
-    {
-        vector<vertex_descriptor> verts;
-        for(vertex_descriptor vert : mesh.vertices_around_face(mesh.halfedge(face_d)))
-            verts.push_back(vert);
-    
-        if(verts.size() == 3)
-        {
-            Triangulation::Vertex_handle v0, v1, v2;
-            v0 = mesh_uvtr_map.left.at(verts[0]);
-            v1 = mesh_uvtr_map.left.at(verts[1]);
-            v2 = mesh_uvtr_map.left.at(verts[2]);
-
-            Triangulation::Face_handle newface = Tr.create_face(v0, v1, v2);
-            cout << "created new face '" << *newface << "' with vertices " << verts[0] << verts[1] << verts[2] << endl;
-            cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
-
-        }
-    }
-
-    cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
-
     // create a texture
 
-    const int x_size = 128;
-    const int y_size = 128;
+    const int x_size = 256;
+    const int y_size = 256;
 
     PNG texture(x_size, y_size);
-
-    Tr.is_valid(true);
 
     // iterate pixels and sample
     for (int y = 0; y < y_size; y++)
         for (int x = 0; x < x_size; x++)
         {
-            Point_2 uv_point((float)x/float(x_size), (float)y/(float)y_size);
-            cout << "sampling x" << x << " y"<< y << " = " << uv_point << endl;
-            Tr.locate(uv_point);
+            Point_2 uv_point((float)x / float(x_size), (float)y / (float)y_size);
+            cout << "sampling x" << x << " y" << y << " = " << uv_point << endl;
+            bool found = false;
+            Point_2 v0, v1, v2;
+            vector<vertex_descriptor> vertices;
+            for (face_descriptor face_d : mesh.faces())
+            {
+                vertices.clear();
+                for (auto v : mesh.vertices_around_face(mesh.halfedge(face_d)))
+                    vertices.push_back(v);
+
+                v0 = uv_map[vertices[0]];
+                v1 = uv_map[vertices[1]];
+                v2 = uv_map[vertices[2]];
+
+                K::Triangle_2 uv_face(v0, v1, v2);
+                if (CGAL::do_intersect(uv_point, uv_face))
+                {
+                    cout << "found face containing P: " << face_d << endl;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+            {
+                double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
+                double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
+                double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
+                double c = 1.f - a - b;
+
+                Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
+                                                         a,
+                                                         mesh.point(vertices[1]),
+                                                         b,
+                                                         mesh.point(vertices[2]));
+
+                cout << "calculated 3d sample location for P: " << sample_location << endl;
+                Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
+                for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                {
+                    cout << get<0>(points[it->first]) << " found with index " << it->first
+                         << " . squared distance: " << it->second << endl;
+                    Color c = get<2>(points[it->first]);
+                    cout << "color at target: R" << int(c[0]) << " G" << int(c[1]) << " B" << int(c[2]) << endl;
+                    texture.set_pixel(x, y, c[0], c[1], c[2]);
+                }
+            }
         }
-
     
-
-    // print points
-    // for (size_t i = 0; i < points.size(); ++i)
-    // {
-    //     const Point &p = get<0>(points[i]);
-    //     const Vector &n = get<1>(points[i]);
-    //     const Color &c = get<2>(points[i]);
-    //     cout << "Point (" << p << ") with normal (" << n
-    //          << ") and color (" << int(c[0]) << " " << int(c[1]) << " " << int(c[2])
-    //          << ")" << endl;
-    // }
+    texture.save("textures/tex.png");
 
     return 0;
 }

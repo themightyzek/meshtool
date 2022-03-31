@@ -1,4 +1,5 @@
 #include <vector>
+#include <iostream>
 #include "lodepng.h"
 
 class PNG
@@ -14,9 +15,13 @@ public:
         width = w;
         height = h;
         data.reserve(sizeof(unsigned char) * w * h * 3);
+        for (unsigned i = 0; i < (w * h * 3); i++)
+        {
+            data.push_back((unsigned char)(0));
+        }
     }
 
-    PNG(const char* path)
+    PNG(const char *path)
     {
         lodepng::decode(data, width, height, path);
     }
@@ -28,9 +33,7 @@ public:
                    unsigned char b)
     {
         unsigned long index = (x + (width * y)) * 3;
-        data[index] = r;
-        data[index + 1] = g;
-        data[index + 2] = b;
+        set_pixel(index, r, g, b);
     }
 
     void set_pixel(unsigned long i,
@@ -47,6 +50,13 @@ public:
     {
         lodepng::State state;
         state.info_raw.colortype = LCT_RGB;
-        lodepng::encode(path, data, width, height);
+        std::vector<unsigned char> png;
+        std::cout << "data size: " << data.size() << std::endl;
+        std::cout << "width * height * 3: " << width * height * 3 << std::endl;
+        unsigned error = lodepng::encode(png, data, width, height, state);
+        if (!error)
+            error = lodepng::save_file(png, "textures/test_save.png");
+        if (error)
+            std::cout << "Error saving PNG: " << lodepng_error_text(error) << std::endl;
     };
 };
