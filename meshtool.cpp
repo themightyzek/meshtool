@@ -17,6 +17,7 @@
 #include <CGAL/Polygon_mesh_processing/measure.h>
 #include <CGAL/Triangulation_2.h>
 #include <CGAL/boost/graph/iterator.h>
+#include <CGAL/boost/bimap.hpp>
 
 typedef CGAL::Simple_cartesian<double> K;
 typedef K::FT FT;
@@ -38,6 +39,8 @@ typedef CGAL::Triangulation_2<K> Triangulation;
 typedef boost::graph_traits<SurfaceMesh>::vertex_descriptor vertex_descriptor;
 typedef boost::graph_traits<SurfaceMesh>::halfedge_descriptor halfedge_descriptor;
 typedef boost::graph_traits<SurfaceMesh>::face_descriptor face_descriptor;
+
+typedef boost::bimap<vertex_descriptor, Triangulation::Vertex_handle> MeshUVTrBimap;
 
 using namespace std;
 namespace SMP = CGAL::Surface_mesh_parameterization;
@@ -119,11 +122,12 @@ int main(int argc, char **argv)
 
     // create triangulation from UV map
     Triangulation Tr;
-    map<vertex_descriptor, Triangulation::Vertex_handle> mesh2uv_tr;
+
+    MeshUVTrBimap mesh_uvtr_map;
 
     for(vertex_descriptor v : mesh.vertices())
     {
-        mesh2uv_tr[v] = Tr.insert(uv_map[v]);
+        mesh_uvtr_map.insert(MeshUVTrBimap::value_type(v, Tr.insert(uv_map[v])));
     }
 
     cout << "Success: Created Triangulation from UV Map" << endl;
@@ -141,6 +145,8 @@ int main(int argc, char **argv)
         cout << face << ": " << *face.vertex(0) << " | " << *face.vertex(1) << " | " << *face.vertex(2) << endl;
         face_handles.push_back(f);
     }
+    cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
+
 
     // Triangulation has correct vertices, but its faces are not correct
     for(Triangulation::Face_handle f : face_handles)
@@ -149,6 +155,7 @@ int main(int argc, char **argv)
     }
 
     cout << "Deleted Triangulation faces" << endl; 
+    cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
 
     for(face_descriptor face_d : mesh.faces())
     {
@@ -158,43 +165,36 @@ int main(int argc, char **argv)
     
         if(verts.size() == 3)
         {
-            Triangulation::Face_handle newface = Tr.create_face(mesh2uv_tr[verts[0]], mesh2uv_tr[verts[1]], mesh2uv_tr[verts[2]]);
-            cout << "created new face " << *newface << " with vertices " << verts[0] << verts[1] << verts[2] << endl;
+            Triangulation::Vertex_handle v0, v1, v2;
+            v0 = mesh_uvtr_map.left.at(verts[0]);
+            v1 = mesh_uvtr_map.left.at(verts[1]);
+            v2 = mesh_uvtr_map.left.at(verts[2]);
+
+            Triangulation::Face_handle newface = Tr.create_face(v0, v1, v2);
+            cout << "created new face '" << *newface << "' with vertices " << verts[0] << verts[1] << verts[2] << endl;
+            cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
+
         }
     }
 
+    cout << "triangulation has " << Tr.all_edges().size() << " edges, " << endl;
+
     // create a texture
 
-    const int x_size = 256;
-    const int y_size = 256;
+    const int x_size = 128;
+    const int y_size = 128;
 
-    PNG texture(256, 256);
+    PNG texture(x_size, y_size);
 
-    return 0;
+    Tr.is_valid(true);
 
     // iterate pixels and sample
     for (int y = 0; y < y_size; y++)
         for (int x = 0; x < x_size; x++)
         {
-            for (SurfaceMesh::Face_index face_i : mesh.faces())
-            {
-                cout << "mesh face index: " << face_i << endl;
-                Triangulation T;
-                auto h = mesh.halfedge(face_i);
-                for (vertex_descriptor v : mesh.vertices_around_face(h))
-                {
-                    cout << "found mesh vertex: " << mesh.point(v) << endl;
-                    T.insert(uv_map[v]);
-                    cout << "adding UV vertex: " << uv_map[v] << endl;
-                }
-                Triangulation::Face_handle huh = T.locate(Point_2(x, y));
-                bool ok = false;
-                for (auto f : T.all_face_handles())
-                {
-                    if (f == huh)
-                        ok = true;
-                }
-            }
+            Point_2 uv_point((float)x/float(x_size), (float)y/(float)y_size);
+            cout << "sampling x" << x << " y"<< y << " = " << uv_point << endl;
+            Tr.locate(uv_point);
         }
 
     
