@@ -288,11 +288,42 @@ int main(int argc, char **argv)
 
     
     
-    
-    obj* obj_test = obj_create(nullptr);
-    
+    obj* o = obj_create(nullptr);
+
+    for (vertex_descriptor v : mesh.vertices())
+    {
+        Point p = mesh.point(v);
+        int vi = obj_add_vert(o);
+        float position[3];
+        position[0] = p.x();
+        position[1] = p.y();
+        position[2] = p.z();
+        obj_set_vert_v(o, vi, position);
+        float uv[2];
+        uv[0] = uv_map[v].x();
+        uv[1] = uv_map[v].y();
+        obj_set_vert_t(o, vi, uv);
+    }
+
+    int o_surface_index = obj_add_surf(o);
+
+    for (face_descriptor f : mesh.faces())
+    {
+        int i = 0;
+        int fis[3];
+        for (vertex_descriptor v : mesh.vertices_around_face(mesh.halfedge(f)))
+        {
+            fis[i++] = v.idx();
+        }
+        int fi = obj_add_poly(o, o_surface_index);
+        obj_set_poly(o, o_surface_index, fi, fis);
+    }
+
+    obj_write(o, "out/objtest.obj", "out/objtest.mtl", 4);
 
 
+
+    /* ASSIMP STUFF
     
     Assimp::DefaultLogger::create("", Assimp::Logger::VERBOSE);
 
@@ -367,8 +398,12 @@ int main(int argc, char **argv)
     SMP::IO::output_uvmap_to_off(mesh, bhd, uv_map, out);
 
     cout << "done, sadly, a segmentation fault will occur on exit" << endl;
+
+
     // ~aiScene() causes SIGSEGV, i dont know why
     // probably something going out of scope that ~aiScene then attempts to delete
+
+    */
 
     return 0;
 }
