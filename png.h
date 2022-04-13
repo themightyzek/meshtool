@@ -55,7 +55,7 @@ public:
         std::cout << "width * height * 3: " << width * height * 3 << std::endl;
         unsigned error = lodepng::encode(png, data, width, height, state);
         if (!error)
-            error = lodepng::save_file(png, "textures/test_save.png");
+            error = lodepng::save_file(png, path);
         if (error)
             std::cout << "Error saving PNG: " << lodepng_error_text(error) << std::endl;
     };
