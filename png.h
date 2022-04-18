@@ -51,8 +51,6 @@ public:
         lodepng::State state;
         state.info_raw.colortype = LCT_RGB;
         std::vector<unsigned char> png;
-        std::cout << "data size: " << data.size() << std::endl;
-        std::cout << "width * height * 3: " << width * height * 3 << std::endl;
         unsigned error = lodepng::encode(png, data, width, height, state);
         if (!error)
             error = lodepng::save_file(png, path);
