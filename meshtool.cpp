@@ -164,9 +164,14 @@ int main(int argc, char **argv)
 
     #pragma region smoothing
 
+    const unsigned int smoothing_neighbors = 12;
+    CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(simple_points, smoothing_neighbors);
+
     #pragma endregion
 
     #pragma region normals estimation
+
+    
 
     #pragma endregion
 
@@ -259,12 +264,12 @@ int main(int argc, char **argv)
     }
     else
     {
-        cout << "Success: created UV map for mesh" << endl
-             << "UV Coords: " << endl;
-        for (vertex_descriptor v : mesh.vertices())
-        {
-            cout << v << ": " << uv_map[v] << endl;
-        }
+        cout << "Success: created UV map for mesh" << endl;
+        // cout << "UV Coords: " << endl;
+        // for (vertex_descriptor v : mesh.vertices())
+        // {
+        //     cout << v << ": " << uv_map[v] << endl;
+        // }
     }
 
     #pragma endregion
