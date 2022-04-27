@@ -18,6 +18,8 @@ extern "C" {
 #include <CGAL/IO/read_ply_points.h>
 #include <CGAL/compute_average_spacing.h>
 #include <CGAL/remove_outliers.h>
+#include <CGAL/grid_simplify_point_set.h>
+#include <CGAL/jet_smooth_point_set.h>
 
 #include <CGAL/Surface_mesh/Surface_mesh.h>
 #include <CGAL/property_map.h>
@@ -91,7 +93,8 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
-    // --------------------------------------------
+    #pragma region argument parsing
+    
     CLI::App app{"App description"};
     string meshFilename = "default";
     string cloudFilename = "default";
@@ -99,9 +102,10 @@ int main(int argc, char **argv)
     app.add_option("-c,--in-cloud", cloudFilename, "The input cloud in .ply format");
     CLI11_PARSE(app, argc, argv);
 
-    // --------------CGAL----------------5
+    #pragma endregion
 
-    // read point cloud
+    #pragma region read point cloud
+    
     vector<PNCI> points;
     ifstream in_c(cloudFilename);
     if (!in_c ||
@@ -124,33 +128,53 @@ int main(int argc, char **argv)
         cout << "Success: cloud loaded. " << points.size() << " points" << endl;
     }
 
-    vector<PNCI> simple_points(points);
+    vector<Point> simple_points;
+    for (auto &&p : points)
+    {
+        simple_points.push_back(get<0>(p));
+    }
+
+    #pragma endregion
+
+    #pragma region outlier removal & simplification
+
+    // calculate average spacing
     const unsigned int average_spacing_neighbors = 6;
     double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
         simple_points,
-        average_spacing_neighbors, 
-        CGAL::parameters::point_map(CGAL::Nth_of_tuple_property_map<0, PNCI>()));
-
+        average_spacing_neighbors);
     cout << "Average spacing: " << average_spacing << endl;
+    
+    // Point with distance above 2*average_spacing are considered outliers
+    // remove outliers
+    std::vector<Point>::iterator first_to_remove = CGAL::remove_outliers (simple_points, average_spacing_neighbors); 
+    cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+            << "% of the points are considered outliers when using a distance threshold of "
+            << 2. * average_spacing << endl;
+    simple_points.erase(first_to_remove, simple_points.end());
 
-    std::vector<PNCI>::iterator first_to_remove
-    = CGAL::remove_outliers
-    (points,
-     average_spacing_neighbors,
-     CGAL::parameters::threshold_percent (100.). // No limit on the number of outliers to remove
-     threshold_distance (2. * average_spacing)); // Point with distance above 2*average_spacing are considered outliers
+    // grid simplification
+    const double cell_size = 1.;
+    first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size);
+    cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+            << "% of the points are culled by grid simplfication" << endl;
+    simple_points.erase(first_to_remove, simple_points.end());
 
-    vector<PNCI>::iterator first_to_remove = CGAL::remove_outliers(
-        simple_points, average_spacing_neighbors,
-        CGAL::parameters::threshold_percent(100.));
+    #pragma endregion
 
-    // cout << (100. * std::distance(first_to_remove, points.end()) / (double)(simple_points.size()))
-    //         << "% of the points are considered outliers when using a distance threshold of "
-    //         << 2. * average_spacing << endl;
+    #pragma region smoothing
 
-    // simple_points.erase(first_to_remove, simple_points.end());
+    #pragma endregion
 
-    return 0;
+    #pragma region normals estimation
+
+    #pragma endregion
+
+    #pragma region surface recon
+
+    #pragma endregion
+
+    #pragma region spacial search tree init
 
     vector<Point> rawpoints;
     rawpoints.reserve(points.size());
@@ -179,9 +203,10 @@ int main(int argc, char **argv)
 
     cout << " done." << endl;
 
-    
+    #pragma endregion
 
-    // read mesh
+    #pragma region read mesh
+
     SurfaceMesh mesh;
     ifstream in_m(meshFilename);
     if (!in_m ||
@@ -196,6 +221,7 @@ int main(int argc, char **argv)
     {
         cout << "Success: loaded mesh " << meshFilename << endl;
         cout << mesh.number_of_vertices() << " verts, " << mesh.number_of_faces() << " tris" << endl;
+        /*
         cout << "Vertex list:" << endl;
         for (vertex_descriptor v : mesh.vertices())
         {
@@ -210,9 +236,12 @@ int main(int argc, char **argv)
                 cout << v << " ";
             cout << endl;
         }
+        */
     }
 
-    // UV unwrap
+    #pragma endregion
+
+    #pragma region UV unwrap
 
     halfedge_descriptor bhd = CGAL::Polygon_mesh_processing::longest_border(mesh).first;
 
@@ -238,13 +267,14 @@ int main(int argc, char **argv)
         }
     }
 
-    // create a texture
+    #pragma endregion
 
+    #pragma region sample texture
+
+    // create a texture
     const int x_size = 2048;
     const int y_size = 2048;
-
     PNG texture(x_size, y_size);
-
     cout << "Success: created " << x_size << "x" << y_size << " PNG texture" << endl << "Sampling cloud...";
 
     // iterate pixels and sample
@@ -294,11 +324,19 @@ int main(int argc, char **argv)
                 }
             }
         }
+    
+    #pragma endregion
+
+    #pragma region save png texture
 
     const char* tex_filename = "out/tex.png";
     texture.save(tex_filename);
     cout << "Success: texture sampled and saved as " << tex_filename << endl;
     
+    #pragma endregion
+
+    #pragma region save obj model
+
     obj* o = obj_create(nullptr);
 
     for (vertex_descriptor v : mesh.vertices())
@@ -339,6 +377,8 @@ int main(int argc, char **argv)
     obj_write(o, obj_filename, mtl_filename, 4);
     
     cout << "Success: object saved as " << tex_filename << endl;
+
+    #pragma endregion
 
     return 0;
 }
