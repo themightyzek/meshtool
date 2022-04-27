@@ -12,20 +12,15 @@ extern "C" {
     #include "obj/obj.h"
 }
 
-#include "assimp/Importer.hpp"
-#include "assimp/Exporter.hpp"
-#include "assimp/scene.h"
-#include "assimp/postprocess.h"
-#include "assimp/vector3.h"
-#include "assimp/material.h"
-#include "assimp/mesh.h"
-#include "assimp/types.h"
-#include "assimp/DefaultLogger.hpp"
-
 #include <CGAL/Simple_cartesian.h>
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+
+#include <CGAL/IO/read_ply_points.h>
+#include <CGAL/compute_average_spacing.h>
+#include <CGAL/remove_outliers.h>
+
 #include <CGAL/Surface_mesh/Surface_mesh.h>
 #include <CGAL/property_map.h>
-#include <CGAL/IO/read_ply_points.h>
 #include <CGAL/Surface_mesh_parameterization/parameterize.h>
 #include <CGAL/Surface_mesh_parameterization/Mean_value_coordinates_parameterizer_3.h>
 #include <CGAL/Surface_mesh_parameterization/Square_border_parameterizer_3.h>
@@ -36,12 +31,14 @@ extern "C" {
 #include <CGAL/Search_traits_adapter.h>
 #include <CGAL/point_generators_3.h>
 #include <CGAL/Orthogonal_k_neighbor_search.h>
+
 #include <CGAL/boost/iterator/counting_iterator.hpp>
 #include <CGAL/boost/graph/iterator.h>
 
 #include <utility>
 
 typedef CGAL::Simple_cartesian<double> K;
+
 typedef K::FT FT;
 typedef K::Point_3 Point;
 typedef K::Point_2 Point_2;
@@ -94,17 +91,6 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
-    // Assimp::Importer importer;
-    // const aiScene* testScene = importer.ReadFile("test_in/vodka.obj", aiProcess_ValidateDataStructure);
-    // cout << importer.GetErrorString() << endl;
-
-    // aiTexture* testTex;
-    // if(testScene->mMaterials[0]->GetTexture(aiTextureType_, 0, "vodkadöner.png") != AI_SUCCESS)
-    // {
-
-    // }
-
-
     // --------------------------------------------
     CLI::App app{"App description"};
     string meshFilename = "default";
@@ -138,6 +124,34 @@ int main(int argc, char **argv)
         cout << "Success: cloud loaded. " << points.size() << " points" << endl;
     }
 
+    vector<PNCI> simple_points(points);
+    const unsigned int average_spacing_neighbors = 6;
+    double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
+        simple_points,
+        average_spacing_neighbors, 
+        CGAL::parameters::point_map(CGAL::Nth_of_tuple_property_map<0, PNCI>()));
+
+    cout << "Average spacing: " << average_spacing << endl;
+
+    std::vector<PNCI>::iterator first_to_remove
+    = CGAL::remove_outliers
+    (points,
+     average_spacing_neighbors,
+     CGAL::parameters::threshold_percent (100.). // No limit on the number of outliers to remove
+     threshold_distance (2. * average_spacing)); // Point with distance above 2*average_spacing are considered outliers
+
+    vector<PNCI>::iterator first_to_remove = CGAL::remove_outliers(
+        simple_points, average_spacing_neighbors,
+        CGAL::parameters::threshold_percent(100.));
+
+    // cout << (100. * std::distance(first_to_remove, points.end()) / (double)(simple_points.size()))
+    //         << "% of the points are considered outliers when using a distance threshold of "
+    //         << 2. * average_spacing << endl;
+
+    // simple_points.erase(first_to_remove, simple_points.end());
+
+    return 0;
+
     vector<Point> rawpoints;
     rawpoints.reserve(points.size());
     for (size_t i = 0; i < points.size(); ++i)
@@ -153,7 +167,6 @@ int main(int argc, char **argv)
         Splitter(),
         Traits(ppmap));
     Distance tr_dist(ppmap);
-    // Tree tree(rawpoints.begin(), rawpoints.end());
 
     cout << "Success: spatial search tree created. Initializing...";
     Neighbor_search init_search(tree, Point(0, 0, 0), 1, 0, true, tr_dist);
@@ -165,6 +178,8 @@ int main(int argc, char **argv)
     }
 
     cout << " done." << endl;
+
+    
 
     // read mesh
     SurfaceMesh mesh;
@@ -225,8 +240,8 @@ int main(int argc, char **argv)
 
     // create a texture
 
-    const int x_size = 1024;
-    const int y_size = 1024;
+    const int x_size = 2048;
+    const int y_size = 2048;
 
     PNG texture(x_size, y_size);
 
