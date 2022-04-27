@@ -20,6 +20,8 @@ extern "C" {
 #include <CGAL/remove_outliers.h>
 #include <CGAL/grid_simplify_point_set.h>
 #include <CGAL/jet_smooth_point_set.h>
+#include <CGAL/pca_estimate_normals.h>
+#include <CGAL/mst_orient_normals.h>
 
 #include <CGAL/Surface_mesh/Surface_mesh.h>
 #include <CGAL/property_map.h>
@@ -53,6 +55,9 @@ typedef CGAL::Nth_of_tuple_property_map<0, PNCI> Point_map;
 typedef CGAL::Nth_of_tuple_property_map<1, PNCI> Normal_map;
 typedef CGAL::Nth_of_tuple_property_map<2, PNCI> Color_map;
 typedef CGAL::Nth_of_tuple_property_map<3, PNCI> Intensity_map;
+
+// Point with normal vector
+typedef std::pair<Point, Vector> PN;
 
 typedef CGAL::Surface_mesh<Point> SurfaceMesh;
 
@@ -128,10 +133,10 @@ int main(int argc, char **argv)
         cout << "Success: cloud loaded. " << points.size() << " points" << endl;
     }
 
-    vector<Point> simple_points;
+    list<PN> simple_points;
     for (auto &&p : points)
     {
-        simple_points.push_back(get<0>(p));
+        simple_points.push_back(PN(get<0>(p), Vector(CGAL::NULL_VECTOR)));
     }
 
     #pragma endregion
@@ -142,36 +147,54 @@ int main(int argc, char **argv)
     const unsigned int average_spacing_neighbors = 6;
     double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
         simple_points,
-        average_spacing_neighbors);
+        average_spacing_neighbors,
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << "Average spacing: " << average_spacing << endl;
+
     
     // Point with distance above 2*average_spacing are considered outliers
     // remove outliers
-    std::vector<Point>::iterator first_to_remove = CGAL::remove_outliers (simple_points, average_spacing_neighbors); 
+    std::list<PN>::iterator first_to_remove = CGAL::remove_outliers(
+        simple_points, 
+        average_spacing_neighbors, 
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>())); 
     cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
             << "% of the points are considered outliers when using a distance threshold of "
             << 2. * average_spacing << endl;
     simple_points.erase(first_to_remove, simple_points.end());
 
     // grid simplification
-    const double cell_size = 1.;
-    first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size);
+    const double cell_size = 0.1;
+    first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size, CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
             << "% of the points are culled by grid simplfication" << endl;
     simple_points.erase(first_to_remove, simple_points.end());
-
+    
+    
     #pragma endregion
 
     #pragma region smoothing
 
     const unsigned int smoothing_neighbors = 12;
-    CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(simple_points, smoothing_neighbors);
+    //CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(simple_points, smoothing_neighbors);
 
     #pragma endregion
 
     #pragma region normals estimation
 
+    unsigned int normal_est_neighbors = 12;
+    CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
+        simple_points,
+        normal_est_neighbors,
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).
+        normal_map(CGAL::Second_of_pair_property_map<PN>())
+    );
     
+    for (auto &&simp : simple_points)
+    {
+        cout << "point: " << simp.first << "  normal: " << simp.second << endl;
+    }
+    return 0;
 
     #pragma endregion
 
