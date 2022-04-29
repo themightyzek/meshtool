@@ -3,18 +3,25 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <utility>
 
+// arg parsing
 #include "CLI11.hpp"
 
+// output
 #include "png.h"
-
-extern "C" {
-    #include "obj/obj.h"
+extern "C"
+{
+#include "obj/obj.h"
 }
 
+// CGAL
 #include <CGAL/Simple_cartesian.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/boost/iterator/counting_iterator.hpp>
+#include <CGAL/boost/graph/iterator.h>
 
+// point cloud processing
 #include <CGAL/IO/read_ply_points.h>
 #include <CGAL/compute_average_spacing.h>
 #include <CGAL/remove_outliers.h>
@@ -23,6 +30,16 @@ extern "C" {
 #include <CGAL/pca_estimate_normals.h>
 #include <CGAL/mst_orient_normals.h>
 
+// poisson recon
+#include <CGAL/Polyhedron_3.h>
+// #include <CGAL/Surface_mesh_default_triangulation_3.h>
+// #include <CGAL/make_surface_mesh.h>
+// #include <CGAL/Implicit_surface_3.h>
+//#include <CGAL/IO/facets_in_complex_2_to_triangle_mesh.h>
+//#include <CGAL/Poisson_reconstruction_function.h>
+#include <CGAL/poisson_surface_reconstruction.h>
+
+// UV unwrapping
 #include <CGAL/Surface_mesh/Surface_mesh.h>
 #include <CGAL/property_map.h>
 #include <CGAL/Surface_mesh_parameterization/parameterize.h>
@@ -30,18 +47,14 @@ extern "C" {
 #include <CGAL/Surface_mesh_parameterization/Square_border_parameterizer_3.h>
 #include <CGAL/Surface_mesh_parameterization/IO/File_off.h>
 
+// point cloud sampling
 #include <CGAL/Polygon_mesh_processing/measure.h>
 #include <CGAL/Search_traits_3.h>
 #include <CGAL/Search_traits_adapter.h>
 #include <CGAL/point_generators_3.h>
 #include <CGAL/Orthogonal_k_neighbor_search.h>
 
-#include <CGAL/boost/iterator/counting_iterator.hpp>
-#include <CGAL/boost/graph/iterator.h>
-
-#include <utility>
-
-typedef CGAL::Simple_cartesian<double> K;
+typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 
 typedef K::FT FT;
 typedef K::Point_3 Point;
@@ -94,12 +107,23 @@ namespace SMP = CGAL::Surface_mesh_parameterization;
 typedef SMP::Square_border_arc_length_parameterizer_3<SurfaceMesh> Border_parameterizer;
 typedef SMP::Mean_value_coordinates_parameterizer_3<SurfaceMesh, Border_parameterizer> Parameterizer;
 
+// simple surface recon
+
+// advanced surface recon
+typedef CGAL::First_of_pair_property_map<PN> PN_point_map;
+typedef CGAL::Second_of_pair_property_map<PN> PN_normal_map;
+typedef CGAL::Polyhedron_3<K> Polyhedron;
+// typedef CGAL::Poisson_reconstruction_function<K> Poisson_recon_function;
+// typedef CGAL::Surface_mesh_default_triangulation_3 SM_triangulation;
+// typedef CGAL::Surface_mesh_complex_2_in_triangulation_3<SM_triangulation> C2tri3;
+// typedef CGAL::Implicit_surface_3<K, Poisson_recon_function> Surface_3;
+
 using namespace std;
 
 int main(int argc, char **argv)
 {
-    #pragma region argument parsing
-    
+#pragma region argument parsing
+
     CLI::App app{"App description"};
     string meshFilename = "default";
     string cloudFilename = "default";
@@ -107,10 +131,10 @@ int main(int argc, char **argv)
     app.add_option("-c,--in-cloud", cloudFilename, "The input cloud in .ply format");
     CLI11_PARSE(app, argc, argv);
 
-    #pragma endregion
+#pragma endregion
 
-    #pragma region read point cloud
-    
+#pragma region read point cloud
+
     vector<PNCI> points;
     ifstream in_c(cloudFilename);
     if (!in_c ||
@@ -139,9 +163,9 @@ int main(int argc, char **argv)
         simple_points.push_back(PN(get<0>(p), Vector(CGAL::NULL_VECTOR)));
     }
 
-    #pragma endregion
+#pragma endregion
 
-    #pragma region outlier removal & simplification
+#pragma region outlier removal & simplification
 
     // calculate average spacing
     const unsigned int average_spacing_neighbors = 6;
@@ -151,58 +175,55 @@ int main(int argc, char **argv)
         CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << "Average spacing: " << average_spacing << endl;
 
-    
     // Point with distance above 2*average_spacing are considered outliers
     // remove outliers
     std::list<PN>::iterator first_to_remove = CGAL::remove_outliers(
-        simple_points, 
-        average_spacing_neighbors, 
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>())); 
+        simple_points,
+        average_spacing_neighbors,
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-            << "% of the points are considered outliers when using a distance threshold of "
-            << 2. * average_spacing << endl;
+         << "% of the points are considered outliers when using a distance threshold of "
+         << 2. * average_spacing << endl;
     simple_points.erase(first_to_remove, simple_points.end());
 
     // grid simplification
-    const double cell_size = 0.1;
+    const double cell_size = 0.5;
     first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size, CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-            << "% of the points are culled by grid simplfication" << endl;
+         << "% of the points are culled by grid simplfication" << endl;
     simple_points.erase(first_to_remove, simple_points.end());
-    
-    
-    #pragma endregion
 
-    #pragma region smoothing
+    cout << "point array size after SOR + grid simplification: " << simple_points.size() << endl;
+
+
+#pragma endregion
+
+#pragma region smoothing
 
     const unsigned int smoothing_neighbors = 12;
-    //CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(simple_points, smoothing_neighbors);
+    CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(
+        simple_points,
+        smoothing_neighbors,
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
 
-    #pragma endregion
+#pragma endregion
 
-    #pragma region normals estimation
+#pragma region normals estimation
 
     unsigned int normal_est_neighbors = 12;
     CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
         simple_points,
         normal_est_neighbors,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).
-        normal_map(CGAL::Second_of_pair_property_map<PN>())
-    );
-    
-    for (auto &&simp : simple_points)
-    {
-        cout << "point: " << simp.first << "  normal: " << simp.second << endl;
-    }
-    return 0;
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).normal_map(CGAL::Second_of_pair_property_map<PN>()));
 
-    #pragma endregion
+    CGAL::mst_orient_normals(
+        simple_points,
+        normal_est_neighbors,
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).normal_map(CGAL::Second_of_pair_property_map<PN>()));
 
-    #pragma region surface recon
+#pragma endregion
 
-    #pragma endregion
-
-    #pragma region spacial search tree init
+#pragma region spacial search tree init
 
     vector<Point> rawpoints;
     rawpoints.reserve(points.size());
@@ -231,45 +252,74 @@ int main(int argc, char **argv)
 
     cout << " done." << endl;
 
-    #pragma endregion
+#pragma endregion
 
-    #pragma region read mesh
+#pragma region read mesh
 
     SurfaceMesh mesh;
-    ifstream in_m(meshFilename);
-    if (!in_m ||
-        !CGAL::read_ply(
-            in_m,
-            mesh))
+    // ifstream in_m(meshFilename);
+    // if (!in_m ||
+    //     !CGAL::read_ply(
+    //         in_m,
+    //         mesh))
+    // {
+    //     cerr << "Error: unable to read from file " << meshFilename << endl;
+    //     return EXIT_FAILURE;
+    // }
+    // else
+    // {
+    //     cout << "Success: loaded mesh " << meshFilename << endl;
+    //     cout << mesh.number_of_vertices() << " verts, " << mesh.number_of_faces() << " tris" << endl;
+    //     /*
+    //     cout << "Vertex list:" << endl;
+    //     for (vertex_descriptor v : mesh.vertices())
+    //     {
+    //         cout << v << ": " << mesh.point(v) << endl;
+    //     }
+
+    //     cout << "Face list:" << endl;
+    //     for (face_descriptor face_i : mesh.faces())
+    //     {
+    //         cout << face_i << ": ";
+    //         for (vertex_descriptor v : mesh.vertices_around_face(mesh.halfedge(face_i)))
+    //             cout << v << " ";
+    //         cout << endl;
+    //     }
+    //     */
+    // }
+
+#pragma endregion
+
+#pragma region surface recon
+
+    Polyhedron output_mesh;
+    double average_spacing_2 = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
+        simple_points,
+        average_spacing_neighbors,
+        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+
+    CGAL::poisson_surface_reconstruction_delaunay
+      (simple_points.begin(), simple_points.end(),
+       CGAL::First_of_pair_property_map<PN>(),
+       CGAL::Second_of_pair_property_map<PN>(),
+       output_mesh, average_spacing);
+    
+    if(
+        true
+    )
     {
-        cerr << "Error: unable to read from file " << meshFilename << endl;
-        return EXIT_FAILURE;
+        CGAL::copy_face_graph(output_mesh, mesh);
+        cout << "surface reconstruction successful." << endl;
     }
     else
     {
-        cout << "Success: loaded mesh " << meshFilename << endl;
-        cout << mesh.number_of_vertices() << " verts, " << mesh.number_of_faces() << " tris" << endl;
-        /*
-        cout << "Vertex list:" << endl;
-        for (vertex_descriptor v : mesh.vertices())
-        {
-            cout << v << ": " << mesh.point(v) << endl;
-        }
-
-        cout << "Face list:" << endl;
-        for (face_descriptor face_i : mesh.faces())
-        {
-            cout << face_i << ": ";
-            for (vertex_descriptor v : mesh.vertices_around_face(mesh.halfedge(face_i)))
-                cout << v << " ";
-            cout << endl;
-        }
-        */
+        cerr << "Surface reconstruction failed. Exiting." << endl;
+        return EXIT_FAILURE;
     }
 
-    #pragma endregion
+#pragma endregion
 
-    #pragma region UV unwrap
+#pragma region UV unwrap
 
     halfedge_descriptor bhd = CGAL::Polygon_mesh_processing::longest_border(mesh).first;
 
@@ -295,15 +345,16 @@ int main(int argc, char **argv)
         // }
     }
 
-    #pragma endregion
+#pragma endregion
 
-    #pragma region sample texture
+#pragma region sample texture
 
     // create a texture
     const int x_size = 2048;
     const int y_size = 2048;
     PNG texture(x_size, y_size);
-    cout << "Success: created " << x_size << "x" << y_size << " PNG texture" << endl << "Sampling cloud...";
+    cout << "Success: created " << x_size << "x" << y_size << " PNG texture" << endl
+         << "Sampling cloud...";
 
     // iterate pixels and sample
     for (int y = 0; y < y_size; y++)
@@ -347,25 +398,25 @@ int main(int argc, char **argv)
                 for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
                 {
                     Color c = get<2>(points[it->first]);
-                    //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented 
-                    texture.set_pixel(x, (y_size-1)-y, c[0], c[1], c[2]);
+                    //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
+                    texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
                 }
             }
         }
-    
-    #pragma endregion
 
-    #pragma region save png texture
+#pragma endregion
 
-    const char* tex_filename = "out/tex.png";
+#pragma region save png texture
+
+    const char *tex_filename = "out/tex.png";
     texture.save(tex_filename);
     cout << "Success: texture sampled and saved as " << tex_filename << endl;
-    
-    #pragma endregion
 
-    #pragma region save obj model
+#pragma endregion
 
-    obj* o = obj_create(nullptr);
+#pragma region save obj model
+
+    obj *o = obj_create(nullptr);
 
     for (vertex_descriptor v : mesh.vertices())
     {
@@ -399,14 +450,14 @@ int main(int argc, char **argv)
     int mi = obj_add_mtrl(o);
     obj_set_mtrl_name(o, mi, "texture");
 
-    const char* obj_filename = "out/objtest.obj";
-    const char* mtl_filename = "out/trash.mtl";
+    const char *obj_filename = "out/objtest.obj";
+    const char *mtl_filename = "out/trash.mtl";
 
     obj_write(o, obj_filename, mtl_filename, 4);
-    
+
     cout << "Success: object saved as " << tex_filename << endl;
 
-    #pragma endregion
+#pragma endregion
 
     return 0;
 }
