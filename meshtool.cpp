@@ -187,7 +187,7 @@ int main(int argc, char **argv)
     simple_points.erase(first_to_remove, simple_points.end());
 
     // grid simplification
-    const double cell_size = 0.5;
+    const double cell_size = 0.01;
     first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size, CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
          << "% of the points are culled by grid simplfication" << endl;
@@ -295,14 +295,14 @@ int main(int argc, char **argv)
     Polyhedron output_mesh;
     double average_spacing_2 = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
         simple_points,
-        average_spacing_neighbors,
+        24,
         CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
 
     CGAL::poisson_surface_reconstruction_delaunay
       (simple_points.begin(), simple_points.end(),
        CGAL::First_of_pair_property_map<PN>(),
        CGAL::Second_of_pair_property_map<PN>(),
-       output_mesh, average_spacing);
+       output_mesh, average_spacing, 5.0, 30.0, 5);
     
     if(
         true
@@ -310,6 +310,7 @@ int main(int argc, char **argv)
     {
         CGAL::copy_face_graph(output_mesh, mesh);
         cout << "surface reconstruction successful." << endl;
+        cout << "number of vertices: " << mesh.num_vertices() << endl;
     }
     else
     {
@@ -455,9 +456,8 @@ int main(int argc, char **argv)
 
     obj_write(o, obj_filename, mtl_filename, 4);
 
-    cout << "Success: object saved as " << tex_filename << endl;
+    cout << "Success: object saved as " << obj_filename << endl;
 
 #pragma endregion
 
-    return 0;
 }
