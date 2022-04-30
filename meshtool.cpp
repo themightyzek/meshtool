@@ -4,6 +4,8 @@
 #include <string>
 #include <map>
 #include <utility>
+#include <algorithm>
+#include <array>
 
 // arg parsing
 #include "CLI11.hpp"
@@ -38,6 +40,9 @@ extern "C"
 //#include <CGAL/IO/facets_in_complex_2_to_triangle_mesh.h>
 //#include <CGAL/Poisson_reconstruction_function.h>
 #include <CGAL/poisson_surface_reconstruction.h>
+
+// advancing front recon
+#include <CGAL/Advancing_front_surface_reconstruction.h>
 
 // UV unwrapping
 #include <CGAL/Surface_mesh/Surface_mesh.h>
@@ -107,7 +112,38 @@ namespace SMP = CGAL::Surface_mesh_parameterization;
 typedef SMP::Square_border_arc_length_parameterizer_3<SurfaceMesh> Border_parameterizer;
 typedef SMP::Mean_value_coordinates_parameterizer_3<SurfaceMesh, Border_parameterizer> Parameterizer;
 
-// simple surface recon
+// advancing front
+typedef std::array<std::size_t, 3> Facet;
+struct Construct
+{
+    SurfaceMesh &mesh;
+    template <typename PointIterator>
+    Construct(SurfaceMesh &mesh, PointIterator b, PointIterator e)
+        : mesh(mesh)
+    {
+        for (; b != e; ++b)
+        {
+            boost::graph_traits<SurfaceMesh>::vertex_descriptor v;
+            v = add_vertex(mesh);
+            mesh.point(v) = *b;
+        }
+    }
+    Construct &operator=(const Facet f)
+    {
+        typedef boost::graph_traits<SurfaceMesh>::vertex_descriptor vertex_descriptor;
+        typedef boost::graph_traits<SurfaceMesh>::vertices_size_type size_type;
+        mesh.add_face(vertex_descriptor(static_cast<size_type>(f[0])),
+                      vertex_descriptor(static_cast<size_type>(f[1])),
+                      vertex_descriptor(static_cast<size_type>(f[2])));
+        return *this;
+    }
+    Construct &
+    operator*() { return *this; }
+    Construct &
+    operator++() { return *this; }
+    Construct
+    operator++(int) { return *this; }
+};
 
 // advanced surface recon
 typedef CGAL::First_of_pair_property_map<PN> PN_point_map;
@@ -165,7 +201,7 @@ int main(int argc, char **argv)
 
 #pragma endregion
 
-#pragma region outlier removal & simplification
+#pragma region outlier removal &simplification
 
     // calculate average spacing
     const unsigned int average_spacing_neighbors = 6;
@@ -187,14 +223,13 @@ int main(int argc, char **argv)
     simple_points.erase(first_to_remove, simple_points.end());
 
     // grid simplification
-    const double cell_size = 0.01;
+    const double cell_size = 0.5;
     first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size, CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
     cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
          << "% of the points are culled by grid simplfication" << endl;
     simple_points.erase(first_to_remove, simple_points.end());
 
     cout << "point array size after SOR + grid simplification: " << simple_points.size() << endl;
-
 
 #pragma endregion
 
@@ -254,69 +289,20 @@ int main(int argc, char **argv)
 
 #pragma endregion
 
-#pragma region read mesh
-
-    SurfaceMesh mesh;
-    // ifstream in_m(meshFilename);
-    // if (!in_m ||
-    //     !CGAL::read_ply(
-    //         in_m,
-    //         mesh))
-    // {
-    //     cerr << "Error: unable to read from file " << meshFilename << endl;
-    //     return EXIT_FAILURE;
-    // }
-    // else
-    // {
-    //     cout << "Success: loaded mesh " << meshFilename << endl;
-    //     cout << mesh.number_of_vertices() << " verts, " << mesh.number_of_faces() << " tris" << endl;
-    //     /*
-    //     cout << "Vertex list:" << endl;
-    //     for (vertex_descriptor v : mesh.vertices())
-    //     {
-    //         cout << v << ": " << mesh.point(v) << endl;
-    //     }
-
-    //     cout << "Face list:" << endl;
-    //     for (face_descriptor face_i : mesh.faces())
-    //     {
-    //         cout << face_i << ": ";
-    //         for (vertex_descriptor v : mesh.vertices_around_face(mesh.halfedge(face_i)))
-    //             cout << v << " ";
-    //         cout << endl;
-    //     }
-    //     */
-    // }
-
-#pragma endregion
-
 #pragma region surface recon
 
-    Polyhedron output_mesh;
-    double average_spacing_2 = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
-        simple_points,
-        24,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+    vector<Point> raw_simple_points;
+    for (auto &&p : simple_points)
+    {
+        raw_simple_points.push_back(p.first);
+    }
+    SurfaceMesh mesh;
 
-    CGAL::poisson_surface_reconstruction_delaunay
-      (simple_points.begin(), simple_points.end(),
-       CGAL::First_of_pair_property_map<PN>(),
-       CGAL::Second_of_pair_property_map<PN>(),
-       output_mesh, average_spacing, 5.0, 30.0, 5);
-    
-    if(
-        true
-    )
-    {
-        CGAL::copy_face_graph(output_mesh, mesh);
-        cout << "surface reconstruction successful." << endl;
-        cout << "number of vertices: " << mesh.num_vertices() << endl;
-    }
-    else
-    {
-        cerr << "Surface reconstruction failed. Exiting." << endl;
-        return EXIT_FAILURE;
-    }
+    Construct construct(mesh, raw_simple_points.begin(), raw_simple_points.end());
+    CGAL::advancing_front_surface_reconstruction(raw_simple_points.begin(), raw_simple_points.end(), construct);
+
+    cout << "surface reconstruction successful." << endl;
+    cout << "number of vertices: " << mesh.num_vertices() << endl;
 
 #pragma endregion
 
@@ -339,79 +325,12 @@ int main(int argc, char **argv)
     else
     {
         cout << "Success: created UV map for mesh" << endl;
-        // cout << "UV Coords: " << endl;
-        // for (vertex_descriptor v : mesh.vertices())
-        // {
-        //     cout << v << ": " << uv_map[v] << endl;
-        // }
-    }
-
-#pragma endregion
-
-#pragma region sample texture
-
-    // create a texture
-    const int x_size = 2048;
-    const int y_size = 2048;
-    PNG texture(x_size, y_size);
-    cout << "Success: created " << x_size << "x" << y_size << " PNG texture" << endl
-         << "Sampling cloud...";
-
-    // iterate pixels and sample
-    for (int y = 0; y < y_size; y++)
-        for (int x = 0; x < x_size; x++)
+        cout << "UV Coords: " << endl;
+        for (vertex_descriptor v : mesh.vertices())
         {
-            Point_2 uv_point((float)x / float(x_size), (float)y / (float)y_size);
-            bool found = false;
-            Point_2 v0, v1, v2;
-            vector<vertex_descriptor> vertices;
-            for (face_descriptor face_d : mesh.faces())
-            {
-                vertices.clear();
-                for (auto v : mesh.vertices_around_face(mesh.halfedge(face_d)))
-                    vertices.push_back(v);
-
-                v0 = uv_map[vertices[0]];
-                v1 = uv_map[vertices[1]];
-                v2 = uv_map[vertices[2]];
-
-                K::Triangle_2 uv_face(v0, v1, v2);
-                if (CGAL::do_intersect(uv_point, uv_face))
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (found)
-            {
-                double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
-                double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
-                double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
-                double c = 1.f - a - b;
-
-                Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
-                                                         a,
-                                                         mesh.point(vertices[1]),
-                                                         b,
-                                                         mesh.point(vertices[2]));
-
-                Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
-                for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
-                {
-                    Color c = get<2>(points[it->first]);
-                    //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
-                    texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
-                }
-            }
+            cout << v << ": " << uv_map[v] << endl;
         }
-
-#pragma endregion
-
-#pragma region save png texture
-
-    const char *tex_filename = "out/tex.png";
-    texture.save(tex_filename);
-    cout << "Success: texture sampled and saved as " << tex_filename << endl;
+    }
 
 #pragma endregion
 
@@ -460,4 +379,69 @@ int main(int argc, char **argv)
 
 #pragma endregion
 
+#pragma region sample texture
+
+    // create a texture
+    const int x_size = 2048;
+    const int y_size = 2048;
+    PNG texture(x_size, y_size);
+    cout << "Success: created " << x_size << "x" << y_size << " PNG texture" << endl
+         << "Sampling cloud..." << endl;
+
+    // iterate pixels and sample
+    for (int y = 0; y < y_size; y++)
+        for (int x = 0; x < x_size; x++)
+        {
+            Point_2 uv_point((float)x / float(x_size), (float)y / (float)y_size);
+            bool found = false;
+            Point_2 v0, v1, v2;
+            vector<vertex_descriptor> vertices;
+            int tries = 0;
+            for (face_descriptor face_d : mesh.faces())
+            {
+                tries++;
+                vertices.clear();
+                for (auto v : mesh.vertices_around_face(mesh.halfedge(face_d)))
+                    vertices.push_back(v);
+
+                v0 = uv_map[vertices[0]];
+                v1 = uv_map[vertices[1]];
+                v2 = uv_map[vertices[2]];
+
+                double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
+                double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
+                double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
+                double c = 1.f - a - b;
+
+                if (a >= 0 && a <= 1 &&
+                    b >= 0 && b <= 1 &&
+                    c >= 0 && c <= 1)
+                {
+                    Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
+                                                             a,
+                                                             mesh.point(vertices[1]),
+                                                             b,
+                                                             mesh.point(vertices[2]));
+
+                    Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
+                    for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                    {
+                        Color c = get<2>(points[it->first]);
+                        //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
+                        texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
+                    }
+                    break;
+                }
+            }
+        }
+
+#pragma endregion
+
+#pragma region save png texture
+
+    const char *tex_filename = "out/tex.png";
+    texture.save(tex_filename);
+    cout << "Success: texture sampled and saved as " << tex_filename << endl;
+
+#pragma endregion
 }

@@ -8,9 +8,7 @@
       "program": "${workspaceFolder}/meshtool",
       "args": [
         "-c",
-        "clouds/cloud.ply", 
-        "-m",
-        "clouds/mesh.ply"
+        "clouds/te/te.ply",
       ],
       "stopAtEntry": false,
       "cwd": "${fileDirname}",
