@@ -111,6 +111,7 @@ typedef Neighbor_search::Distance Distance;
 namespace SMP = CGAL::Surface_mesh_parameterization;
 typedef SMP::Square_border_arc_length_parameterizer_3<SurfaceMesh> Border_parameterizer;
 typedef SMP::Mean_value_coordinates_parameterizer_3<SurfaceMesh, Border_parameterizer> Parameterizer;
+typedef SurfaceMesh::Property_map<vertex_descriptor, Point_2> UV_pmap;
 
 // advancing front
 typedef std::array<std::size_t, 3> Facet;
@@ -155,6 +156,47 @@ typedef CGAL::Polyhedron_3<K> Polyhedron;
 // typedef CGAL::Implicit_surface_3<K, Poisson_recon_function> Surface_3;
 
 using namespace std;
+
+Point *get_sample_location(FT uv_x, FT uv_y, face_descriptor *face_d, SurfaceMesh *mesh, UV_pmap *uv_map)
+{
+    vector<vertex_descriptor> vertices;
+    Point_2 uv_point(uv_x, uv_y);
+    Point *sample_location = nullptr;
+    Point_2 v0, v1, v2;
+    for (auto v : mesh->vertices_around_face(mesh->halfedge(*face_d)))
+        vertices.push_back(v);
+
+    v0 = (*uv_map)[vertices[0]];
+    v1 = (*uv_map)[vertices[1]];
+    v2 = (*uv_map)[vertices[2]];
+
+    double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
+    double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
+    if (a < 0 || a > 1)
+        return sample_location;
+
+    double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
+    if (b < 0 || b > 1)
+        return sample_location;
+
+    double c = 1.f - a - b;
+    if (c < 0 || c > 1)
+        return sample_location;
+
+    if (a >= 0 && a <= 1 &&
+        b >= 0 && b <= 1 &&
+        c >= 0 && c <= 1)
+    {
+        sample_location = new Point(
+            CGAL::barycenter(
+                mesh->point(vertices[0]),
+                a,
+                mesh->point(vertices[1]),
+                b,
+                mesh->point(vertices[2])));
+    }
+    return sample_location;
+}
 
 int main(int argc, char **argv)
 {
@@ -310,7 +352,6 @@ int main(int argc, char **argv)
 
     halfedge_descriptor bhd = CGAL::Polygon_mesh_processing::longest_border(mesh).first;
 
-    typedef SurfaceMesh::Property_map<vertex_descriptor, Point_2> UV_pmap;
     UV_pmap uv_map = mesh.add_property_map<vertex_descriptor, Point_2>("h:uv").first;
     SMP::Error_code UV_err = SMP::parameterize(mesh,
                                                Parameterizer(),
@@ -384,62 +425,65 @@ int main(int argc, char **argv)
          << "Sampling cloud..." << endl;
 
     // iterate pixels and sample
+
+    face_descriptor last_x_hit;
+    bool has_last_x_hit = false;
     for (int y = 0; y < y_size; y++)
+    {
+        has_last_x_hit = false;
         for (int x = 0; x < x_size; x++)
         {
-            Point_2 uv_point((float)x / float(x_size), (float)y / (float)y_size);
-            bool found = false;
-            Point_2 v0, v1, v2;
-            vector<vertex_descriptor> vertices;
-            for (face_descriptor face_d : mesh.faces())
+            Point *sample_location = nullptr;
+            // try last hit first
+            if (has_last_x_hit)
+                sample_location = get_sample_location(
+                    (double)x / (double)x_size,
+                    (double)y / (double)y_size,
+                    &last_x_hit,
+                    &mesh,
+                    &uv_map);
+
+            // if that doesn't work, try all faces.
+            if (!sample_location)
             {
-                vertices.clear();
-                for (auto v : mesh.vertices_around_face(mesh.halfedge(face_d)))
-                    vertices.push_back(v);
-
-                v0 = uv_map[vertices[0]];
-                v1 = uv_map[vertices[1]];
-                v2 = uv_map[vertices[2]];
-
-                double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
-                double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
-                if (a < 0 || a > 1)
-                    continue;
-
-                double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
-                if (b < 0 || b > 1)
-                    continue;
-
-                double c = 1.f - a - b;
-                if (c < 0 || c > 1)
-                    continue;
-
-                if (a >= 0 && a <= 1 &&
-                    b >= 0 && b <= 1 &&
-                    c >= 0 && c <= 1)
+                for (face_descriptor face_d : mesh.faces())
                 {
-                    found = true;
-                    Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
-                                                             a,
-                                                             mesh.point(vertices[1]),
-                                                             b,
-                                                             mesh.point(vertices[2]));
+                    sample_location = get_sample_location(
+                        (double)x / (double)x_size,
+                        (double)y / (double)y_size,
+                        &face_d,
+                        &mesh,
+                        &uv_map);
 
-                    Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
-                    for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                    if (sample_location)
                     {
-                        Color c = get<2>(points[it->first]);
-                        //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
-                        texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
+                        has_last_x_hit = true;
+                        last_x_hit = face_d;
+                        break;
                     }
-                    break;
                 }
             }
-            if (!found)
+
+            if (!sample_location)
             {
                 cout << "Warning: no matching face found on UV map for pixel (" << x << ", " << y << ")" << endl;
             }
+            else
+            {
+                Neighbor_search search(tree, *sample_location, 1, 0, true, tr_dist);
+                for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                {
+                    Color c = get<2>(points[it->first]);
+                    //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
+                    texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
+                }
+                delete sample_location;
+            }
         }
+        int ten_percent_threshold = y_size / 10;
+        if (y % ten_percent_threshold == 0)
+            cout << "Sampling is " << y / ten_percent_threshold << "\% done" << endl;
+    }
 
 #pragma endregion
 
