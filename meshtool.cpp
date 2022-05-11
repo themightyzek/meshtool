@@ -325,11 +325,6 @@ int main(int argc, char **argv)
     else
     {
         cout << "Success: created UV map for mesh" << endl;
-        cout << "UV Coords: " << endl;
-        for (vertex_descriptor v : mesh.vertices())
-        {
-            cout << v << ": " << uv_map[v] << endl;
-        }
     }
 
 #pragma endregion
@@ -396,10 +391,8 @@ int main(int argc, char **argv)
             bool found = false;
             Point_2 v0, v1, v2;
             vector<vertex_descriptor> vertices;
-            int tries = 0;
             for (face_descriptor face_d : mesh.faces())
             {
-                tries++;
                 vertices.clear();
                 for (auto v : mesh.vertices_around_face(mesh.halfedge(face_d)))
                     vertices.push_back(v);
@@ -410,13 +403,22 @@ int main(int argc, char **argv)
 
                 double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
                 double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
+                if(a < 0 || a > 1)
+                    continue;
+
                 double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
+                if(b < 0 || b > 1)
+                    continue;
+
                 double c = 1.f - a - b;
+                if(c < 0 || c > 1)
+                    continue;
 
                 if (a >= 0 && a <= 1 &&
                     b >= 0 && b <= 1 &&
                     c >= 0 && c <= 1)
                 {
+                    found = true;
                     Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
                                                              a,
                                                              mesh.point(vertices[1]),
@@ -432,6 +434,10 @@ int main(int argc, char **argv)
                     }
                     break;
                 }
+            }
+            if(!found)
+            {
+                cout << "Warning: no matching face found on UV map for pixel (" << x << ", " << y << ")" << endl;
             }
         }
 
