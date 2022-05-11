@@ -411,7 +411,7 @@ int main(int argc, char **argv)
                 if (b < 0 || b > 1)
                     break;
                 double c = 1.f - a - b;
-                if (b < 0 || b > 1)
+                if (c < 0 || c > 1)
                     break;
 
                 Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
