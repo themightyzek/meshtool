@@ -325,11 +325,6 @@ int main(int argc, char **argv)
     else
     {
         cout << "Success: created UV map for mesh" << endl;
-        cout << "UV Coords: " << endl;
-        for (vertex_descriptor v : mesh.vertices())
-        {
-            cout << v << ": " << uv_map[v] << endl;
-        }
     }
 
 #pragma endregion
@@ -410,28 +405,29 @@ int main(int argc, char **argv)
 
                 double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
                 double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
-                double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
-                double c = 1.f - a - b;
-
-                if (a >= 0 && a <= 1 &&
-                    b >= 0 && b <= 1 &&
-                    c >= 0 && c <= 1)
-                {
-                    Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
-                                                             a,
-                                                             mesh.point(vertices[1]),
-                                                             b,
-                                                             mesh.point(vertices[2]));
-
-                    Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
-                    for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
-                    {
-                        Color c = get<2>(points[it->first]);
-                        //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
-                        texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
-                    }
+                if (a < 0 || a > 1)
                     break;
+                double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
+                if (b < 0 || b > 1)
+                    break;
+                double c = 1.f - a - b;
+                if (b < 0 || b > 1)
+                    break;
+
+                Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
+                                                         a,
+                                                         mesh.point(vertices[1]),
+                                                         b,
+                                                         mesh.point(vertices[2]));
+
+                Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
+                for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                {
+                    Color c = get<2>(points[it->first]);
+                    //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
+                    texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
                 }
+                break;
             }
         }
 
