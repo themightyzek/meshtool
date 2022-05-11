@@ -391,10 +391,8 @@ int main(int argc, char **argv)
             bool found = false;
             Point_2 v0, v1, v2;
             vector<vertex_descriptor> vertices;
-            int tries = 0;
             for (face_descriptor face_d : mesh.faces())
             {
-                tries++;
                 vertices.clear();
                 for (auto v : mesh.vertices_around_face(mesh.halfedge(face_d)))
                     vertices.push_back(v);
@@ -406,28 +404,40 @@ int main(int argc, char **argv)
                 double denominator = ((v1.y() - v2.y()) * (v0.x() - v2.x()) + (v2.x() - v1.x()) * (v0.y() - v2.y()));
                 double a = ((v1.y() - v2.y()) * (uv_point.x() - v2.x()) + (v2.x() - v1.x()) * (uv_point.y() - v2.y())) / denominator;
                 if (a < 0 || a > 1)
-                    break;
+                    continue;
+
                 double b = ((v2.y() - v0.y()) * (uv_point.x() - v2.x()) + (v0.x() - v2.x()) * (uv_point.y() - v2.y())) / denominator;
                 if (b < 0 || b > 1)
-                    break;
+                    continue;
+
                 double c = 1.f - a - b;
                 if (c < 0 || c > 1)
-                    break;
+                    continue;
 
-                Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
-                                                         a,
-                                                         mesh.point(vertices[1]),
-                                                         b,
-                                                         mesh.point(vertices[2]));
-
-                Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
-                for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                if (a >= 0 && a <= 1 &&
+                    b >= 0 && b <= 1 &&
+                    c >= 0 && c <= 1)
                 {
-                    Color c = get<2>(points[it->first]);
-                    //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
-                    texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
+                    found = true;
+                    Point sample_location = CGAL::barycenter(mesh.point(vertices[0]),
+                                                             a,
+                                                             mesh.point(vertices[1]),
+                                                             b,
+                                                             mesh.point(vertices[2]));
+
+                    Neighbor_search search(tree, sample_location, 1, 0, true, tr_dist);
+                    for (Neighbor_search::iterator it = search.begin(); it != search.end(); ++it)
+                    {
+                        Color c = get<2>(points[it->first]);
+                        //                   vvvvvvvvvvvv Fill the image from bottom to top, since that is the way UV coords are oriented
+                        texture.set_pixel(x, (y_size - 1) - y, c[0], c[1], c[2]);
+                    }
+                    break;
                 }
-                break;
+            }
+            if (!found)
+            {
+                cout << "Warning: no matching face found on UV map for pixel (" << x << ", " << y << ")" << endl;
             }
         }
 
