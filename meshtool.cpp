@@ -466,7 +466,7 @@ int main(int argc, char **argv)
 
             if (!sample_location)
             {
-                cout << "Warning: no matching face found on UV map for pixel (" << x << ", " << y << ")" << endl;
+                // cout << "Warning: no matching face found on UV map for pixel (" << x << ", " << y << ")" << endl;
             }
             else
             {
@@ -482,7 +482,7 @@ int main(int argc, char **argv)
         }
         int ten_percent_threshold = y_size / 10;
         if (y % ten_percent_threshold == 0)
-            cout << "Sampling is " << y / ten_percent_threshold << "\% done" << endl;
+            cout << "Sampling progress: " << (y * 100) / y_size << "\% done" << endl;
     }
 
 #pragma endregion
