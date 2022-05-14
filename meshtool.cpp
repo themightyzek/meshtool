@@ -31,6 +31,8 @@ extern "C"
 #include <CGAL/jet_smooth_point_set.h>
 #include <CGAL/pca_estimate_normals.h>
 #include <CGAL/mst_orient_normals.h>
+#include <CGAL/wlop_simplify_and_regularize_point_set.h>
+#include <CGAL/hierarchy_simplify_point_set.h>
 
 // poisson recon
 #include <CGAL/Polyhedron_3.h>
@@ -203,11 +205,42 @@ int main(int argc, char **argv)
 #pragma region argument parsing
 
     CLI::App app{"App description"};
-    string meshFilename = "default";
     string cloudFilename = "default";
-    app.add_option("-m,--in-mesh", meshFilename, "The input mesh in .ply format");
     app.add_option("-c,--in-cloud", cloudFilename, "The input cloud in .ply format");
+    string meshFilename = "default";
+    app.add_option("-m,--in-mesh", meshFilename, "The input mesh in .ply format. If omitted, the mesh is generated from the cloud.");
+
+    // meshgen settings
+    bool opt_SOR = false;
+    app.add_flag("--sor,--use-stat-outlier-removal", opt_SOR, "Apply statistical outlier removal to the point cloud before generating a mesh.");
+    bool opt_grid_simplification = false;
+    app.add_flag("--s-g,--use-grid-simplification", opt_grid_simplification, "Apply grid simplification to the point cloud before generating a mesh.");
+    double opt_s_grid_cell_size = 0.5;
+    app.add_option("--s-g-c,--grid-cell-size", opt_s_grid_cell_size, "Grid simplification: Grid cell size");
+    bool opt_WLOP_simplification = false;
+    app.add_flag("--s-w,--use-wlop-simplification", opt_WLOP_simplification, "Apply WLOP simplification to the point cloud before generating a mesh.");
+    double opt_s_wlop_retain_percentage = 0.1;
+    app.add_option("--s-w-r,--wlop-retain-percentage", opt_s_wlop_retain_percentage, "WLOP simplification: Percentage of points to retain.");
+    double opt_s_wlop_neighbor_radius = 0.2;
+    app.add_option("--s-w-n,--wlop-neighbor-radius", opt_s_wlop_neighbor_radius, "WLOP simplification: Neighborhood size. From CGAL Point Set Processing user manual: Usually, the neighborhood of sample points should include at least two rings of neighboring sample points. Using a small neighborhood size may not be able to generate regularized result, while using big neighborhood size will make the sample points shrink into the interior of the local surface (under-fitting). The function will use a neighborhood size estimation if this parameter value is set to default or smaller that zero.");
+    bool opt_hierarchy_simplification = false;
+    app.add_flag("--s-h,--use-hierarchy-simplification", opt_hierarchy_simplification, "Apply hierarchy simplification to the point cloud before generating a mesh.");
+    int opt_s_hrch_size = 1000;
+    app.add_option("--s-h-s,--hierarchy-size", opt_s_hrch_size, "Hierarchy simplification: Maximum cluster size. Larger value produces less points overall.");
+    double opt_s_hrch_var = 0.1;
+    app.add_option("--s-h-v,--hierarchy-variation", opt_s_hrch_var, "Hierarchy simplification: Maximum variation. Max 1/3, min 0. Smaller values increase simplification in monotonous regions.");
+    bool opt_smooth = false;
+    app.add_flag("--smooth,--use-jet-smoothing", opt_smooth, "Apply jet smoothing to the point cloud before generating a mesh.");
+
+    // sampling settings
+    int x_size = 1024;
+    int y_size = -1;
+    app.add_option("--t-x,--texture-x-size", x_size, "Texture generator: Output texture x size.");
+    app.add_option("--t-y,--texture-y-size", y_size, "Texture generator: Output texture y size. Omit to use X size.");
+
     CLI11_PARSE(app, argc, argv);
+    if (y_size == -1)
+        y_size = x_size;
 
 #pragma endregion
 
@@ -245,43 +278,89 @@ int main(int argc, char **argv)
 
 #pragma region outlier removal &simplification
 
-    // calculate average spacing
-    const unsigned int average_spacing_neighbors = 6;
-    double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
-        simple_points,
-        average_spacing_neighbors,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-    cout << "Average spacing: " << average_spacing << endl;
+    std::list<PN>::iterator first_to_remove;
+    if (opt_SOR)
+    {
+        // calculate average spacing
+        const unsigned int average_spacing_neighbors = 6;
+        double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
+            simple_points,
+            average_spacing_neighbors,
+            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+        cout << "Average spacing: " << average_spacing << endl;
 
-    // Point with distance above 2*average_spacing are considered outliers
-    // remove outliers
-    std::list<PN>::iterator first_to_remove = CGAL::remove_outliers(
-        simple_points,
-        average_spacing_neighbors,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-    cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-         << "% of the points are considered outliers when using a distance threshold of "
-         << 2. * average_spacing << endl;
-    simple_points.erase(first_to_remove, simple_points.end());
+        // Point with distance above 2*average_spacing are considered outliers
+        // remove outliers
+        first_to_remove = CGAL::remove_outliers(
+            simple_points,
+            average_spacing_neighbors,
+            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+        cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+             << "% of the points are considered outliers when using a distance threshold of "
+             << 2. * average_spacing << endl;
+        simple_points.erase(first_to_remove, simple_points.end());
+    }
 
-    // grid simplification
-    const double cell_size = 0.5;
-    first_to_remove = CGAL::grid_simplify_point_set(simple_points, cell_size, CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-    cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-         << "% of the points are culled by grid simplfication" << endl;
-    simple_points.erase(first_to_remove, simple_points.end());
+    // simplification
+    if (opt_grid_simplification)
+    {
+        first_to_remove = CGAL::grid_simplify_point_set(
+            simple_points,
+            opt_s_grid_cell_size,
+            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+        cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+             << "% of the points are culled by hierarchical simplfication" << endl;
+        simple_points.erase(first_to_remove, simple_points.end());
+        cout << "remaining points: " << simple_points.size() << endl;
+    }
 
-    cout << "point array size after SOR + grid simplification: " << simple_points.size() << endl;
+    if (opt_hierarchy_simplification)
+    {
+        first_to_remove = CGAL::hierarchy_simplify_point_set(
+            simple_points,
+            CGAL::parameters::size(opt_s_hrch_size)
+                .maximum_variation(opt_s_hrch_var)
+                .point_map(CGAL::First_of_pair_property_map<PN>()));
+
+        cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+             << "% of the points are culled by hierarchical simplfication" << endl;
+        simple_points.erase(first_to_remove, simple_points.end());
+        cout << "remaining points: " << simple_points.size() << endl;
+    }
+
+    if (opt_WLOP_simplification)
+    {
+        vector<Point> wlop_in;
+        for (auto &&p : simple_points)
+        {
+            wlop_in.push_back(get<0>(p));
+        }
+        std::vector<Point> wlop_points;
+        CGAL::wlop_simplify_and_regularize_point_set<CGAL::Sequential_tag>(
+            wlop_in,
+            back_inserter(wlop_points),
+            CGAL::parameters::select_percentage(opt_s_wlop_retain_percentage)
+                .neighbor_radius(opt_s_wlop_neighbor_radius));
+
+        cout << "point array size after WLOP simplification: " << wlop_points.size() << endl;
+        simple_points.clear();
+        for (auto &&p : wlop_points)
+        {
+            simple_points.push_back(PN(p, Vector(CGAL::NULL_VECTOR)));
+        }
+    }
 
 #pragma endregion
 
 #pragma region smoothing
-
-    const unsigned int smoothing_neighbors = 12;
-    CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(
-        simple_points,
-        smoothing_neighbors,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+    if (opt_smooth)
+    {
+        const unsigned int smoothing_neighbors = 12;
+        CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(
+            simple_points,
+            smoothing_neighbors,
+            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+    }
 
 #pragma endregion
 
@@ -418,8 +497,6 @@ int main(int argc, char **argv)
 #pragma region sample texture
 
     // create a texture
-    const int x_size = 2048;
-    const int y_size = 2048;
     PNG texture(x_size, y_size);
     cout << "Success: created " << x_size << "x" << y_size << " PNG texture" << endl
          << "Sampling cloud..." << endl;
