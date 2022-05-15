@@ -43,5 +43,4 @@ add_executable( meshtool  lodepng.cpp meshtool.cpp )
 add_to_cached_list( CGAL_EXECUTABLE_TARGETS meshtool )
 
 # Link the executable to CGAL and third-party libraries
-target_link_libraries(meshtool PRIVATE CGAL::CGAL /usr/lib/x86_64-linux-gnu/libassimp.so )
 target_link_libraries(meshtool PRIVATE CGAL::CGAL obj )

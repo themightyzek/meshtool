@@ -207,7 +207,7 @@ int main(int argc, char **argv)
     CLI::App app{"App description"};
     string cloudFilename = "default";
     app.add_option("-c,--in-cloud", cloudFilename, "The input cloud in .ply format");
-    string meshFilename = "default";
+    string meshFilename = "";
     app.add_option("-m,--in-mesh", meshFilename, "The input mesh in .ply format. If omitted, the mesh is generated from the cloud.");
 
     // meshgen settings
@@ -268,114 +268,157 @@ int main(int argc, char **argv)
         cout << "Success: cloud loaded. " << points.size() << " points" << endl;
     }
 
-    list<PN> simple_points;
-    for (auto &&p : points)
+    SurfaceMesh mesh;
+    if (meshFilename != "")
     {
-        simple_points.push_back(PN(get<0>(p), Vector(CGAL::NULL_VECTOR)));
+        // read mesh from file
+        ifstream in_m(meshFilename);
+        if (!in_m ||
+            !CGAL::read_ply(
+                in_m,
+                mesh))
+        {
+            cerr << "Error: unable to read from file " << meshFilename << endl;
+            return EXIT_FAILURE;
+        }
+        else
+        {
+            cout << "Success: loaded mesh " << meshFilename << endl;
+            cout << mesh.number_of_vertices() << " verts, " << mesh.number_of_faces() << " tris" << endl;
+        }
     }
+    else
+    {
+        // start generating mesh
+        list<PN> simple_points;
+        for (auto &&p : points)
+        {
+            simple_points.push_back(PN(get<0>(p), Vector(CGAL::NULL_VECTOR)));
+        }
 
 #pragma endregion
 
 #pragma region outlier removal &simplification
 
-    std::list<PN>::iterator first_to_remove;
-    if (opt_SOR)
-    {
-        // calculate average spacing
-        const unsigned int average_spacing_neighbors = 6;
-        double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
-            simple_points,
-            average_spacing_neighbors,
-            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-        cout << "Average spacing: " << average_spacing << endl;
-
-        // Point with distance above 2*average_spacing are considered outliers
-        // remove outliers
-        first_to_remove = CGAL::remove_outliers(
-            simple_points,
-            average_spacing_neighbors,
-            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-        cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-             << "% of the points are considered outliers when using a distance threshold of "
-             << 2. * average_spacing << endl;
-        simple_points.erase(first_to_remove, simple_points.end());
-    }
-
-    // simplification
-    if (opt_grid_simplification)
-    {
-        first_to_remove = CGAL::grid_simplify_point_set(
-            simple_points,
-            opt_s_grid_cell_size,
-            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-        cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-             << "% of the points are culled by hierarchical simplfication" << endl;
-        simple_points.erase(first_to_remove, simple_points.end());
-        cout << "remaining points: " << simple_points.size() << endl;
-    }
-
-    if (opt_hierarchy_simplification)
-    {
-        first_to_remove = CGAL::hierarchy_simplify_point_set(
-            simple_points,
-            CGAL::parameters::size(opt_s_hrch_size)
-                .maximum_variation(opt_s_hrch_var)
-                .point_map(CGAL::First_of_pair_property_map<PN>()));
-
-        cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
-             << "% of the points are culled by hierarchical simplfication" << endl;
-        simple_points.erase(first_to_remove, simple_points.end());
-        cout << "remaining points: " << simple_points.size() << endl;
-    }
-
-    if (opt_WLOP_simplification)
-    {
-        vector<Point> wlop_in;
-        for (auto &&p : simple_points)
+        std::list<PN>::iterator first_to_remove;
+        if (opt_SOR)
         {
-            wlop_in.push_back(get<0>(p));
-        }
-        std::vector<Point> wlop_points;
-        CGAL::wlop_simplify_and_regularize_point_set<CGAL::Sequential_tag>(
-            wlop_in,
-            back_inserter(wlop_points),
-            CGAL::parameters::select_percentage(opt_s_wlop_retain_percentage)
-                .neighbor_radius(opt_s_wlop_neighbor_radius));
+            // calculate average spacing
+            const unsigned int average_spacing_neighbors = 6;
+            double average_spacing = CGAL::compute_average_spacing<CGAL::Sequential_tag>(
+                simple_points,
+                average_spacing_neighbors,
+                CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+            cout << "Average spacing: " << average_spacing << endl;
 
-        cout << "point array size after WLOP simplification: " << wlop_points.size() << endl;
-        simple_points.clear();
-        for (auto &&p : wlop_points)
-        {
-            simple_points.push_back(PN(p, Vector(CGAL::NULL_VECTOR)));
+            // Point with distance above 2*average_spacing are considered outliers
+            // remove outliers
+            first_to_remove = CGAL::remove_outliers(
+                simple_points,
+                average_spacing_neighbors,
+                CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+            cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+                 << "% of the points are considered outliers when using a distance threshold of "
+                 << 2. * average_spacing << endl;
+            simple_points.erase(first_to_remove, simple_points.end());
         }
-    }
+
+        // simplification
+        if (opt_grid_simplification)
+        {
+            first_to_remove = CGAL::grid_simplify_point_set(
+                simple_points,
+                opt_s_grid_cell_size,
+                CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+            cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+                 << "% of the points are culled by hierarchical simplfication" << endl;
+            simple_points.erase(first_to_remove, simple_points.end());
+            cout << "remaining points: " << simple_points.size() << endl;
+        }
+
+        if (opt_hierarchy_simplification)
+        {
+            first_to_remove = CGAL::hierarchy_simplify_point_set(
+                simple_points,
+                CGAL::parameters::size(opt_s_hrch_size)
+                    .maximum_variation(opt_s_hrch_var)
+                    .point_map(CGAL::First_of_pair_property_map<PN>()));
+
+            cout << (100. * std::distance(first_to_remove, simple_points.end()) / (double)(simple_points.size()))
+                 << "% of the points are culled by hierarchical simplfication" << endl;
+            simple_points.erase(first_to_remove, simple_points.end());
+            cout << "remaining points: " << simple_points.size() << endl;
+        }
+
+        if (opt_WLOP_simplification)
+        {
+            vector<Point> wlop_in;
+            for (auto &&p : simple_points)
+            {
+                wlop_in.push_back(get<0>(p));
+            }
+            std::vector<Point> wlop_points;
+            CGAL::wlop_simplify_and_regularize_point_set<CGAL::Sequential_tag>(
+                wlop_in,
+                back_inserter(wlop_points),
+                CGAL::parameters::select_percentage(opt_s_wlop_retain_percentage)
+                    .neighbor_radius(opt_s_wlop_neighbor_radius));
+
+            cout << "point array size after WLOP simplification: " << wlop_points.size() << endl;
+            simple_points.clear();
+            for (auto &&p : wlop_points)
+            {
+                simple_points.push_back(PN(p, Vector(CGAL::NULL_VECTOR)));
+            }
+        }
 
 #pragma endregion
 
 #pragma region smoothing
-    if (opt_smooth)
-    {
-        const unsigned int smoothing_neighbors = 12;
-        CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(
-            simple_points,
-            smoothing_neighbors,
-            CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
-    }
+        if (opt_smooth)
+        {
+            const unsigned int smoothing_neighbors = 12;
+            CGAL::jet_smooth_point_set<CGAL::Sequential_tag>(
+                simple_points,
+                smoothing_neighbors,
+                CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()));
+        }
 
 #pragma endregion
 
 #pragma region normals estimation
 
-    unsigned int normal_est_neighbors = 12;
-    CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
-        simple_points,
-        normal_est_neighbors,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).normal_map(CGAL::Second_of_pair_property_map<PN>()));
+        // Other remeshing algorithms require a point set with normals.
+        // When those are implemented, this region can be used.
 
-    CGAL::mst_orient_normals(
-        simple_points,
-        normal_est_neighbors,
-        CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).normal_map(CGAL::Second_of_pair_property_map<PN>()));
+        // unsigned int normal_est_neighbors = 12;
+        // CGAL::pca_estimate_normals<CGAL::Sequential_tag>(
+        //     simple_points,
+        //     normal_est_neighbors,
+        //     CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).normal_map(CGAL::Second_of_pair_property_map<PN>()));
+
+        // CGAL::mst_orient_normals(
+        //     simple_points,
+        //     normal_est_neighbors,
+        //     CGAL::parameters::point_map(CGAL::First_of_pair_property_map<PN>()).normal_map(CGAL::Second_of_pair_property_map<PN>()));
+
+#pragma endregion
+
+#pragma region surface recon
+
+        vector<Point> raw_simple_points;
+        for (auto &&p : simple_points)
+        {
+            raw_simple_points.push_back(p.first);
+        }
+
+        Construct construct(mesh, raw_simple_points.begin(), raw_simple_points.end());
+        CGAL::advancing_front_surface_reconstruction(raw_simple_points.begin(), raw_simple_points.end(), construct);
+
+        cout << "surface reconstruction successful." << endl;
+        cout << "number of vertices: " << mesh.num_vertices() << endl;
+        // end of mesh generation
+    }
 
 #pragma endregion
 
@@ -407,23 +450,6 @@ int main(int argc, char **argv)
     }
 
     cout << " done." << endl;
-
-#pragma endregion
-
-#pragma region surface recon
-
-    vector<Point> raw_simple_points;
-    for (auto &&p : simple_points)
-    {
-        raw_simple_points.push_back(p.first);
-    }
-    SurfaceMesh mesh;
-
-    Construct construct(mesh, raw_simple_points.begin(), raw_simple_points.end());
-    CGAL::advancing_front_surface_reconstruction(raw_simple_points.begin(), raw_simple_points.end(), construct);
-
-    cout << "surface reconstruction successful." << endl;
-    cout << "number of vertices: " << mesh.num_vertices() << endl;
 
 #pragma endregion
 
@@ -571,4 +597,5 @@ int main(int argc, char **argv)
     cout << "Success: texture sampled and saved as " << tex_filename << endl;
 
 #pragma endregion
+    return EXIT_SUCCESS;
 }
